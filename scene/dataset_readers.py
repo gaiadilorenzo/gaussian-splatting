@@ -10,6 +10,7 @@
 #
 
 import os
+import os.path as osp
 import sys
 from PIL import Image
 from typing import NamedTuple
@@ -22,6 +23,10 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
+
+from src.utils import scan3r
+import open3d as o3d
+
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -104,12 +109,28 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
     sys.stdout.write('\n')
     return cam_infos
 
-def fetchPly(path):
-    plydata = PlyData.read(path)
-    vertices = plydata['vertex']
-    positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
-    colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
-    normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+
+def fetchPly(path, obj_id=None):
+    plydata = PlyData.read(path) if path.endswith(".ply") else np.load(path)
+    vertices = plydata["vertex"] if path.endswith(".ply") else plydata
+    positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
+    colors = np.vstack([vertices["red"], vertices["green"], vertices["blue"]]).T / 255.0
+
+    if "nx" in vertices:
+        normals = np.vstack([vertices["nx"], vertices["ny"], vertices["nz"]]).T
+    else:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(positions)
+        pcd.estimate_normals()
+        normals = np.asarray(pcd.normals)
+
+    if obj_id is not None:
+        obj_ids_pc = plydata["objectId"]
+        indices = np.where(obj_ids_pc == obj_id)[0]
+        positions = positions[indices]
+        colors = colors[indices]
+        normals = normals[indices]
+    
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
 def storePly(path, xyz, rgb):
@@ -254,7 +275,70 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
+
+def read3RScanSceneInfo(path, scan_id, object_id=None):
+    """
+    Load a 3RScan scene from a given path.
+
+    Args:
+        path (str): Path to the 3RScan scene (DataDir/<scan>).
+        images (str): Path to the images folder.
+        eval (bool): Whether to use the evaluation split.
+    """
+    
+    path = Path(path)
+    point_cloud_path = osp.join(
+        path, scan_id, "data.npy"
+    )
+    point_cloud = fetchPly(point_cloud_path, obj_id=object_id)
+    intrinsics = scan3r.load_intrinsics(data_dir=path, scan_id=scan_id)
+    frame_idxs = (
+        scan3r.load_frame_idxs(data_dir=path, scan_id=scan_id)
+        if object_id is None
+        else scan3r.load_frame_idxs_per_obj(
+            data_dir=path.parent, scan_id=scan_id, obj_id=object_id
+        )
+    )
+
+    extrinsics = scan3r.load_all_poses(
+        data_dir=path, scan_id=scan_id, frame_idxs=frame_idxs
+    )
+    image_path = osp.join(path, scan_id, "sequence")
+    all_cameras = [
+        CameraInfo(
+            uid=idx,
+            R=extrinsics[int(idx)][:3, :3],  # Rotation matrix
+            T=extrinsics[int(idx)][:3, 3],
+            FovY=intrinsics["intrinsic_mat"][1, 1],
+            FovX=intrinsics["intrinsic_mat"][0, 0],
+            image=Image.open(osp.join(image_path, f"frame-{frame}.color.jpg")),
+            image_path=osp.join(image_path, f"frame-{frame}.color.jpg"),
+            image_name=f"frame-{frame}.color.jpg",
+            width=intrinsics["width"],
+            height=intrinsics["height"],
+        )
+        for idx, frame in enumerate(frame_idxs)
+    ]
+
+    # sample uniformly from the cameras (5 %)
+    test_idxs = np.random.choice(
+        len(all_cameras), int(0.05 * len(all_cameras)), replace=False
+    )
+
+    test_cameras = [all_cameras[idx] for idx in test_idxs]
+    train_cameras = [cam for i, cam in enumerate(all_cameras) if i not in test_idxs]
+
+    return SceneInfo(
+        point_cloud=point_cloud,
+        train_cameras=train_cameras,
+        test_cameras=test_cameras,
+        nerf_normalization=getNerfppNorm(all_cameras),
+        ply_path=point_cloud_path,
+    )
+
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender": readNerfSyntheticInfo,
+    "3RScan": read3RScanSceneInfo,
 }
