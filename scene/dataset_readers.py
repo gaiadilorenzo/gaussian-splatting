@@ -24,7 +24,7 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 
-from src.utils import scan3r
+from utils import scan3r
 import open3d as o3d
 
 
@@ -99,9 +99,11 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         else:
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
-        image_path = os.path.join(images_folder, os.path.basename(extr.name))
-        image_name = os.path.basename(image_path).split(".")[0]
+        image_path = os.path.join(images_folder, os.path.basename(extr.name)) if os.path.exists(extr.name) is None else extr.name
+        image_name = os.path.basename(image_path).split(".")[0] if os.path.exists(extr.name) is None else extr.name
         image = Image.open(image_path)
+        
+        
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width, height=height)
@@ -299,7 +301,10 @@ def read3RScanSceneInfo(path, scan_id, object_id=None):
             data_dir=path.parent, scan_id=scan_id, obj_id=object_id
         )
     )
-
+    
+    if object_id is not None:
+        frame_idxs = [frame_idx for frame_idx, _ in frame_idxs]
+        
     extrinsics = scan3r.load_all_poses(
         data_dir=path, scan_id=scan_id, frame_idxs=frame_idxs
     )
@@ -322,7 +327,7 @@ def read3RScanSceneInfo(path, scan_id, object_id=None):
 
     # sample uniformly from the cameras (5 %)
     test_idxs = np.random.choice(
-        len(all_cameras), int(0.05 * len(all_cameras)), replace=False
+        len(all_cameras), int(0. * len(all_cameras)), replace=False
     )
 
     test_cameras = [all_cameras[idx] for idx in test_idxs]
