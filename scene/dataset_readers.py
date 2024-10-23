@@ -110,7 +110,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
     return cam_infos
 
 
-def fetchPly(path, obj_id=None):
+def fetchPly(path, obj_id=None, obj_pc=False):
     plydata = PlyData.read(path) if path.endswith(".ply") else np.load(path)
     vertices = plydata["vertex"] if path.endswith(".ply") else plydata
     positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
@@ -124,7 +124,7 @@ def fetchPly(path, obj_id=None):
         pcd.estimate_normals()
         normals = np.asarray(pcd.normals)
 
-    if obj_id is not None:
+    if obj_id is not None and obj_pc is True:
         obj_ids_pc = plydata["objectId"]
         indices = np.where(obj_ids_pc == obj_id)[0]
         positions = positions[indices]
@@ -309,8 +309,8 @@ def read3RScanSceneInfo(path, scan_id, object_id=None):
             uid=idx,
             R=extrinsics[int(idx)][:3, :3],  # Rotation matrix
             T=extrinsics[int(idx)][:3, 3],
-            FovY=intrinsics["intrinsic_mat"][1, 1],
-            FovX=intrinsics["intrinsic_mat"][0, 0],
+            FovY=focal2fov(intrinsics["intrinsic_mat"][1, 1], intrinsics["height"]),
+            FovX=focal2fov(intrinsics["intrinsic_mat"][0, 0], intrinsics["width"]),
             image=Image.open(osp.join(image_path, f"frame-{frame}.color.jpg")),
             image_path=osp.join(image_path, f"frame-{frame}.color.jpg"),
             image_name=f"frame-{frame}.color.jpg",
