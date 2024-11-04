@@ -278,72 +278,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     return scene_info
 
 
-def read3RScanSceneInfo(path, scan_id, object_id=None):
-    """
-    Load a 3RScan scene from a given path.
-
-    Args:
-        path (str): Path to the 3RScan scene (DataDir/<scan>).
-        images (str): Path to the images folder.
-        eval (bool): Whether to use the evaluation split.
-    """
-    
-    path = Path(path)
-    point_cloud_path = osp.join(
-        path, scan_id, "data.npy"
-    )
-    point_cloud = fetchPly(point_cloud_path, obj_id=object_id)
-    intrinsics = scan3r.load_intrinsics(data_dir=path, scan_id=scan_id)
-    frame_idxs = (
-        scan3r.load_frame_idxs(data_dir=path, scan_id=scan_id)
-        if object_id is None
-        else scan3r.load_frame_idxs_per_obj(
-            data_dir=path.parent, scan_id=scan_id, obj_id=object_id
-        )
-    )
-    
-    if object_id is not None:
-        frame_idxs = [frame_idx for frame_idx, _ in frame_idxs]
-        
-    extrinsics = scan3r.load_all_poses(
-        data_dir=path, scan_id=scan_id, frame_idxs=frame_idxs
-    )
-    image_path = osp.join(path, scan_id, "sequence")
-    all_cameras = [
-        CameraInfo(
-            uid=idx,
-            R=extrinsics[int(idx)][:3, :3],  # Rotation matrix
-            T=extrinsics[int(idx)][:3, 3],
-            FovY=focal2fov(intrinsics["intrinsic_mat"][1, 1], intrinsics["height"]),
-            FovX=focal2fov(intrinsics["intrinsic_mat"][0, 0], intrinsics["width"]),
-            image=Image.open(osp.join(image_path, f"frame-{frame}.color.jpg")),
-            image_path=osp.join(image_path, f"frame-{frame}.color.jpg"),
-            image_name=f"frame-{frame}.color.jpg",
-            width=intrinsics["width"],
-            height=intrinsics["height"],
-        )
-        for idx, frame in enumerate(frame_idxs)
-    ]
-
-    # sample uniformly from the cameras (5 %)
-    test_idxs = np.random.choice(
-        len(all_cameras), int(0. * len(all_cameras)), replace=False
-    )
-
-    test_cameras = [all_cameras[idx] for idx in test_idxs]
-    train_cameras = [cam for i, cam in enumerate(all_cameras) if i not in test_idxs]
-
-    return SceneInfo(
-        point_cloud=point_cloud,
-        train_cameras=train_cameras,
-        test_cameras=test_cameras,
-        nerf_normalization=getNerfppNorm(all_cameras),
-        ply_path=point_cloud_path,
-    )
-
-
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender": readNerfSyntheticInfo,
-    "3RScan": read3RScanSceneInfo,
+    "Blender": readNerfSyntheticInfo
 }
