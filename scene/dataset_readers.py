@@ -13,7 +13,7 @@ import os
 import os.path as osp
 import sys
 from PIL import Image
-from typing import NamedTuple
+from typing import NamedTuple, List
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
 from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
@@ -23,9 +23,11 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
-
+import cv2
 from utils import scan3r
 import open3d as o3d
+
+MAX_NUM_IMAGES = 600
 
 
 class CameraInfo(NamedTuple):
@@ -112,7 +114,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
     return cam_infos
 
 
-def fetchPly(path, obj_id=None, obj_pc=False):
+def fetchPly(path, indices=None):
     plydata = PlyData.read(path) if path.endswith(".ply") else np.load(path)
     vertices = plydata["vertex"] if path.endswith(".ply") else plydata
     positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
@@ -126,9 +128,7 @@ def fetchPly(path, obj_id=None, obj_pc=False):
         pcd.estimate_normals()
         normals = np.asarray(pcd.normals)
 
-    if obj_id is not None and obj_pc is True:
-        obj_ids_pc = plydata["objectId"]
-        indices = np.where(obj_ids_pc == obj_id)[0]
+    if indices is not None:
         positions = positions[indices]
         colors = colors[indices]
         normals = normals[indices]
@@ -152,7 +152,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, eval, llffhold=8):
+def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -165,17 +165,65 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images == None else images
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
-    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+    cam_infos_unsorted = readColmapCameras(
+        cam_extrinsics=cam_extrinsics,
+        cam_intrinsics=cam_intrinsics,
+        images_folder=os.path.join(path, reading_dir),
+    )
+    cam_infos: List[CameraInfo] = sorted(
+        cam_infos_unsorted.copy(), key=lambda x: x.image_name
+    )
 
     if eval:
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+        train_cam_infos: List[CameraInfo] = [
+            c for idx, c in enumerate(cam_infos) if idx % llffhold != 0
+        ]
+        test_cam_infos: List[CameraInfo] = [
+            c for idx, c in enumerate(cam_infos) if idx % llffhold == 0
+        ]
     else:
-        train_cam_infos = cam_infos
-        test_cam_infos = []
+        train_cam_infos: List[CameraInfo] = cam_infos
+        test_cam_infos: List[CameraInfo] = []
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
+   
+    indices = None
+    if obj_id > 0:
+        frame_idxs, masks = scan3r.load_frame_idxs_per_obj(
+            data_dir=scan3r.get_scan3r_path(path),
+            scan_id=scan3r.get_scan_id(path),
+            obj_id=obj_id,
+        )
+        indices = scan3r.load_obj_annotations(
+            data_dir=scan3r.get_scan3r_path(path),
+            scan_id=scan3r.get_scan_id(path),
+            obj_id=obj_id,
+        )
+        train_cam_infos = [
+            cam
+            for cam in train_cam_infos
+            if any(frame_idx in cam.image_path for frame_idx in frame_idxs)
+        ]
+        test_cam_infos = [
+            cam
+            for cam in test_cam_infos
+            if any(frame_idx in cam.image_path for frame_idx in frame_idxs)
+        ]
+
+        # add mask to images
+        for idx, cam in enumerate(train_cam_infos):
+            mask = masks[idx]
+            mask[mask > 0] = 1
+            mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
+            image = Image.fromarray(np.array(cam.image) * mask[:, :, None])
+            train_cam_infos[idx] = cam._replace(image=image)
+
+        for idx, cam in enumerate(test_cam_infos):
+            mask = masks[idx]
+            mask[mask > 0] = 1
+            mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
+            image = Image.fromarray(np.array(cam.image) * mask[:, :, None])
+            test_cam_infos[idx] = cam._replace(image=image)
 
     ply_path = os.path.join(path, "sparse/0/points3D.ply")
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
@@ -188,16 +236,29 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
             xyz, rgb, _ = read_points3D_text(txt_path)
         storePly(ply_path, xyz, rgb)
     try:
-        pcd = fetchPly(ply_path)
+        pcd = fetchPly(ply_path, indices)
     except:
         pcd = None
 
-    scene_info = SceneInfo(point_cloud=pcd,
-                           train_cameras=train_cam_infos,
-                           test_cameras=test_cam_infos,
-                           nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
+    blurriness = lambda x: cv2.Laplacian(
+        cv2.cvtColor(cv2.imread(x), cv2.COLOR_BGR2GRAY), cv2.CV_64F
+    ).var()
+    train_cam_infos = sorted(
+        train_cam_infos, key=lambda x: blurriness(x.image_path), reverse=True
+    )[:MAX_NUM_IMAGES]
+    test_cam_infos = sorted(
+        test_cam_infos, key=lambda x: blurriness(x.image_path), reverse=True
+    )[:MAX_NUM_IMAGES]
+
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+    )
     return scene_info
+
 
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
     cam_infos = []
