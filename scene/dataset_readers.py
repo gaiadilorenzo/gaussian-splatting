@@ -132,6 +132,10 @@ def fetchPly(path, indices=None):
         positions = positions[indices]
         colors = colors[indices]
         normals = normals[indices]
+    if positions.shape[0] < 100:
+        positions = np.repeat(positions, 100, axis=0)
+        colors = np.repeat(colors, 100, axis=0)
+        normals = np.repeat(normals, 100, axis=0)
     
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
@@ -249,6 +253,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None):
     test_cam_infos = sorted(
         test_cam_infos, key=lambda x: blurriness(x.image_path), reverse=True
     )[:MAX_NUM_IMAGES]
+
 
     scene_info = SceneInfo(
         point_cloud=pcd,
