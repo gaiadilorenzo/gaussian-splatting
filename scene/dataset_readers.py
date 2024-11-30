@@ -8,7 +8,7 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
-
+import logging
 import os
 import os.path as osp
 import sys
@@ -24,11 +24,12 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 import cv2
-from utils import scan3r
+from utils import scan3r, point_cloud
 import open3d as o3d
 
 MAX_NUM_IMAGES = 600
 
+_LOGGER = logging.getLogger(__name__)
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -132,11 +133,11 @@ def fetchPly(path, indices=None):
         positions = positions[indices]
         colors = colors[indices]
         normals = normals[indices]
-    if positions.shape[0] < 100:
-        positions = np.repeat(positions, 100, axis=0)
-        colors = np.repeat(colors, 100, axis=0)
-        normals = np.repeat(normals, 100, axis=0)
-    
+        
+    # add a minimum number of points 
+    positions, indices = point_cloud.pcl_farthest_sample(positions, 2048, return_idxs=True)
+    colors = colors[indices]
+    normals = normals[indices]
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
 def storePly(path, xyz, rgb):
@@ -241,7 +242,8 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None):
         storePly(ply_path, xyz, rgb)
     try:
         pcd = fetchPly(ply_path, indices)
-    except:
+    except Exception as e:
+        _LOGGER.error(f"Error reading ply file: {e}")
         pcd = None
 
     blurriness = lambda x: cv2.Laplacian(
