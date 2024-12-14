@@ -73,12 +73,12 @@ class MiniCam:
         self.T = T
         self.znear = 0.01
         self.zfar = 100.0
-        self.world_view_transform = torch.from_numpy(getWorld2View2(R, T, trans, scale)).transpose(0, 1) if type(R) == np.ndarray else getWorld2View2(R, T, trans, scale).transpose(0, 1)
         
-        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1)
-        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.world_view_transform = torch.from_numpy(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0).cuda()
         
         self.camera_center = self.world_view_transform.inverse()[3, :3]
         fx = fov2focal(fovx, width)
         fy = fov2focal(fovy, height)
-        self.K = torch.tensor([[fx, 0, width/2], [0, fy, height/2], [0, 0, 1] ])
+        self.K = torch.tensor([[fx, 0, width/2], [0, fy, height/2], [0, 0, 1] ]).cuda()
