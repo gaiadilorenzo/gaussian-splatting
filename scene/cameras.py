@@ -12,7 +12,7 @@
 import torch
 from torch import nn
 import numpy as np
-from utils.graphics_utils import getWorld2View2, getProjectionMatrix
+from utils.graphics_utils import fov2focal, getWorld2View2, getProjectionMatrix
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
@@ -55,6 +55,9 @@ class Camera(nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+        fx = fov2focal(FoVx, self.image_width)
+        fy = fov2focal(FoVy, self.image_height)
+        self.K = torch.tensor([[fx, 0, self.image_width/2], [0, fy, self.image_height/2], [0, 0, 1] ]).cuda()
 
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, R, T, trans=np.array([0.0, 0.0, 0.0]), scale=1.0):
@@ -70,11 +73,12 @@ class MiniCam:
         self.T = T
         self.znear = 0.01
         self.zfar = 100.0
+        self.world_view_transform = torch.from_numpy(getWorld2View2(R, T, trans, scale)).transpose(0, 1) if type(R) == np.ndarray else getWorld2View2(R, T, trans, scale).transpose(0, 1)
         
-        
-        self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
-        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1)
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         
         self.camera_center = self.world_view_transform.inverse()[3, :3]
-        
+        fx = fov2focal(fovx, width)
+        fy = fov2focal(fovy, height)
+        self.K = torch.tensor([[fx, 0, width/2], [0, fy, height/2], [0, 0, 1] ])

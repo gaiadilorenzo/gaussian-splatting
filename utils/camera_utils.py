@@ -9,7 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-from scene.cameras import Camera
+from scene.cameras import Camera, MiniCam
 import numpy as np
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
@@ -61,13 +61,13 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args):
 
 def camera_to_JSON(id, camera : Camera):
     Rt = np.zeros((4, 4))
-    Rt[:3, :3] = camera.R.transpose()
-    Rt[:3, 3] = camera.T
+    Rt[:3, :3] = camera.R.transpose() # R_cam = R_world^T
+    Rt[:3, 3] = camera.T # T_cam = T_world
     Rt[3, 3] = 1.0
 
-    W2C = np.linalg.inv(Rt)
-    pos = W2C[:3, 3]
-    rot = W2C[:3, :3]
+    W2C = np.linalg.inv(Rt) # W2C = Rt^-1
+    pos = W2C[:3, 3] # T_world
+    rot = W2C[:3, :3] # R_world
     serializable_array_2d = [x.tolist() for x in rot]
     camera_entry = {
         'id' : id,
@@ -80,3 +80,18 @@ def camera_to_JSON(id, camera : Camera):
         'fx' : fov2focal(camera.FovX, camera.width)
     }
     return camera_entry
+
+def JSON_to_camera(json_entry):
+    R = np.array(json_entry['rotation'])
+    T = np.array(json_entry['position'])
+    
+    W2C = np.eye(4)
+    W2C[:3, :3] = R
+    W2C[:3, 3] = T
+    Rt = np.linalg.inv(W2C)
+    R = Rt[:3, :3].transpose()
+    T = Rt[:3, 3]
+    
+    FoVx = np.arctan(json_entry['fx'] / 2) * 2
+    FoVy = np.arctan(json_entry['fy'] / 2) * 2
+    return MiniCam(width=json_entry['width'], height=json_entry['height'], fovy=FoVy, fovx=FoVx, znear=0.01, zfar=100, R=R, T=T)
