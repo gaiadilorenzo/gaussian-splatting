@@ -31,18 +31,15 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     rendered_images = []
     ground_truth_images = []
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        rendering_dict = render(view, gaussians, pipeline, background, indices=indices)
-        rendering = rendering_dict["render"]
-        meta = rendering_dict["meta"]
+        rendering = render(view, gaussians, pipeline, background, indices=indices)["render"]
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png")) if save else None
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png")) if save else None
-        rendered_images.append((rendering, meta))
-        ground_truth_images.append((gt, meta))
-    
+        rendered_images.append(rendering)
+        ground_truth_images.append(gt)
     return rendered_images, ground_truth_images
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, indices=None, obj_id=None):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, indices=None, obj_id=None, save=False):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
@@ -53,12 +50,12 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         rendered_images = []
         ground_truth_images = []
         if not skip_train:
-            rendered, ground_truth = render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, indices=indices, obj_id=obj_id)
+            rendered, ground_truth = render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, indices=indices, obj_id=obj_id, save=save)
             rendered_images.extend(rendered)
             ground_truth_images.extend(ground_truth)
             
         if not skip_test:
-            rendered, ground_truth = render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, indices=indices, obj_id=obj_id)
+            rendered, ground_truth = render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, indices=indices, obj_id=obj_id, save=save)
             rendered_images.extend(rendered)
             ground_truth_images.extend(ground_truth)
         

@@ -55,6 +55,7 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
         self.object_id = -1
+        self.num_images = -1
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

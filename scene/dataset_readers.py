@@ -24,7 +24,7 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 import cv2
-from utils import scan3r, point_cloud
+from utils import scan3r, point_cloud, scannet_utils
 import open3d as o3d
 
 MAX_NUM_IMAGES = 600
@@ -104,9 +104,8 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name)) if os.path.exists(extr.name) is None else extr.name
         image_name = os.path.basename(image_path).split(".")[0] if os.path.exists(extr.name) is None else extr.name
+        image_path = image_path.replace("/cluster/project/cvg/Shared_datasets", "/mnt/hdd4tb/")
         image = Image.open(image_path)
-        
-        
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width, height=height)
@@ -119,8 +118,7 @@ def fetchPly(path, indices=None):
     plydata = PlyData.read(path) if path.endswith(".ply") else np.load(path)
     vertices = plydata["vertex"] if path.endswith(".ply") else plydata
     positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
-    colors = np.vstack([vertices["red"], vertices["green"], vertices["blue"]]).T / 255.0
-
+    colors = np.array([ 1, 0, 0] * positions.shape[0]).reshape(-1, 3)
     if "nx" in vertices:
         normals = np.vstack([vertices["nx"], vertices["ny"], vertices["nz"]]).T
     else:
@@ -157,7 +155,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None):
+def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=None):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -194,69 +192,95 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None):
    
     indices = None
     if obj_id > 0:
-        frame_idxs, masks = scan3r.load_frame_idxs_per_obj(
-            data_dir=scan3r.get_scan3r_path(path),
-            scan_id=scan3r.get_scan_id(path),
-            obj_id=obj_id,
-        )
-        indices = scan3r.load_obj_annotations(
-            data_dir=scan3r.get_scan3r_path(path),
-            scan_id=scan3r.get_scan_id(path),
-            obj_id=obj_id,
-        )
+        try: 
+            frame_idxs, masks = scan3r.load_frame_idxs_per_obj(
+                data_dir=scan3r.get_scan3r_path(path),
+                scan_id=scan3r.get_scan_id(path),
+                obj_id=obj_id,
+            ) 
+        except:
+            frame_idxs, masks = scannet_utils.load_frame_idxs_per_obj(
+                data_dir=scannet_utils.get_scannet_path(path),
+                scan_id=scannet_utils.get_scan_id(path),
+                obj_id=obj_id
+            )
+        try: 
+        
+            indices = scan3r.load_obj_annotations(
+                data_dir=scan3r.get_scan3r_path(path),
+                scan_id=scan3r.get_scan_id(path),
+                obj_id=obj_id,
+            )
+        except:
+            indices = scannet_utils.load_obj_annotations(
+                data_dir=scannet_utils.get_scannet_path(path),
+                scan_id=scannet_utils.get_scan_id(path),
+                obj_id=obj_id,
+            )
         train_cam_infos = [
             cam
             for cam in train_cam_infos
-            if any(frame_idx in cam.image_path for frame_idx in frame_idxs)
+            if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in frame_idxs)
         ]
         test_cam_infos = [
             cam
             for cam in test_cam_infos
-            if any(frame_idx in cam.image_path for frame_idx in frame_idxs)
+            if any(frame_idx in cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in frame_idxs)
         ]
 
         # add mask to images
+        frame_to_mask = {frame_idx: mask for frame_idx, mask in zip(frame_idxs, masks)}
         for idx, cam in enumerate(train_cam_infos):
-            mask = masks[idx]
+            frame_idx = cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "")
+            mask = frame_to_mask[frame_idx]
             mask[mask > 0] = 1
-            mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
-            image = Image.fromarray(np.array(cam.image) * mask[:, :, None])
+            image = Image.fromarray((np.array(cam.image) * mask[:, :, None]).astype(np.uint8))
             train_cam_infos[idx] = cam._replace(image=image)
 
         for idx, cam in enumerate(test_cam_infos):
-            mask = masks[idx]
+            frame_idx = cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "")
+            mask = frame_to_mask[frame_idx]
             mask[mask > 0] = 1
-            mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
-            image = Image.fromarray(np.array(cam.image) * mask[:, :, None])
+            image = Image.fromarray(np.array(cam.image) * mask[:, :, None]).astype(np.uint8)
             test_cam_infos[idx] = cam._replace(image=image)
 
     ply_path = os.path.join(path, "sparse/0/points3D.ply")
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
     txt_path = os.path.join(path, "sparse/0/points3D.txt")
-    if not os.path.exists(ply_path):
-        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
-        try:
-            xyz, rgb, _ = read_points3D_binary(bin_path)
-        except:
-            xyz, rgb, _ = read_points3D_text(txt_path)
-        storePly(ply_path, xyz, rgb)
+    # if not os.path.exists(ply_path):
+    print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+    try:
+        xyz, rgb, _ = read_points3D_binary(bin_path)
+    except:
+        xyz, rgb, _ = read_points3D_text(txt_path)
+    storePly(ply_path, xyz, rgb)
     try:
         pcd = fetchPly(ply_path, indices)
     except Exception as e:
         _LOGGER.error(f"Error reading ply file: {e}")
         pcd = None
+    
+    with open('/mnt/hdd4tb/3RScan/files/test_train_test_splits.json', 'r') as f:
+        splits = json.load(f)
+    
+    scan_id = scan3r.get_scan_id(path)
+    if scan_id in splits and str(obj_id) in splits[scan_id]:
+        train_frames = splits[scan_id][str(obj_id)]['train']
+        train_cam_infos = [
+            cam for cam in train_cam_infos 
+            if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in train_frames)
+        ]
+        print("Train cams: ",[ cam.image_path for cam in train_cam_infos])
+        test_frames = splits[scan_id][str(obj_id)]['test']
+        test_cam_infos = [
+            cam for cam in test_cam_infos 
+            if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in test_frames)
+        ]
+        print("Test cams: ", [ cam.image_path for cam in test_cam])
 
-    blurriness = lambda x: cv2.Laplacian(
-        cv2.cvtColor(cv2.imread(x), cv2.COLOR_BGR2GRAY), cv2.CV_64F
-    ).var()
-    train_cam_infos = sorted(
-        train_cam_infos, key=lambda x: blurriness(x.image_path), reverse=True
-    )[:MAX_NUM_IMAGES]
-    test_cam_infos = sorted(
-        test_cam_infos, key=lambda x: blurriness(x.image_path), reverse=True
-    )[:MAX_NUM_IMAGES]
-
-
+    train_cam_infos = train_cam_infos[:MAX_NUM_IMAGES if num_images is None else num_images]
+    test_cam_infos = test_cam_infos[:MAX_NUM_IMAGES if num_images is None else num_images]
+    
     scene_info = SceneInfo(
         point_cloud=pcd,
         train_cameras=train_cam_infos,
