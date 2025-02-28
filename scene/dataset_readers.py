@@ -31,6 +31,8 @@ MAX_NUM_IMAGES = 600
 
 _LOGGER = logging.getLogger(__name__)
 
+_DATA_ROOT_DIR = os.environ.get("DATA_ROOT_DIR", "/mnt/hdd4tb/")
+
 class CameraInfo(NamedTuple):
     uid: int
     R: np.array
@@ -260,7 +262,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=
         _LOGGER.error(f"Error reading ply file: {e}")
         pcd = None
     
-    with open('/mnt/hdd4tb/3RScan/files/test_train_test_splits.json', 'r') as f:
+    with open(f'{_DATA_ROOT_DIR}/3RScan/files/test_train_test_splits.json', 'r') as f:
         splits = json.load(f)
     
     scan_id = scan3r.get_scan_id(path)
@@ -270,13 +272,11 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=
             cam for cam in train_cam_infos 
             if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in train_frames)
         ]
-        print("Train cams: ",[ cam.image_path for cam in train_cam_infos])
         test_frames = splits[scan_id][str(obj_id)]['test']
         test_cam_infos = [
             cam for cam in test_cam_infos 
             if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in test_frames)
         ]
-        print("Test cams: ", [ cam.image_path for cam in test_cam])
 
     train_cam_infos = train_cam_infos[:MAX_NUM_IMAGES if num_images is None else num_images]
     test_cam_infos = test_cam_infos[:MAX_NUM_IMAGES if num_images is None else num_images]
