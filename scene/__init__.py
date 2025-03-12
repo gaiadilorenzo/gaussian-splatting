@@ -41,7 +41,7 @@ class Scene:
         self.test_cameras = {}
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
-            scene_info = sceneLoadTypeCallbacks["Colmap"](
+            scene_info = sceneLoadTypeCallbacks[args.name](
                 args.source_path, args.images, args.eval, obj_id=args.object_id, num_images=args.num_images
             )
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
@@ -85,8 +85,6 @@ class Scene:
                                                            "point_cloud.ply"))
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
-        
-        self.point_cloud = scene_info.point_cloud
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))

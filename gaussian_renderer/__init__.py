@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, indices: torch.Tensor = None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
     """
     Render the scene. 
     
@@ -50,9 +50,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-    means3D = pc.get_xyz[indices] if indices is not None else pc.get_xyz
+    means3D = pc.get_xyz
     means2D = screenspace_points
-    opacity = pc.get_opacity[indices] if indices is not None else pc.get_opacity
+    opacity = pc.get_opacity
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
@@ -60,15 +60,15 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     rotations = None
     cov3D_precomp = None
 
-    scales = pc.get_scaling[indices] if indices is not None else pc.get_scaling
-    rotations = pc.get_rotation[indices] if indices is not None else pc.get_rotation
+    scales = pc.get_scaling
+    rotations = pc.get_rotation
 
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
     shs = None
     colors_precomp = None
     if override_color is None:
-        shs = pc.get_features[indices] if indices is not None else pc.get_features
+        shs = pc.get_features
     else:
         colors_precomp = override_color
 

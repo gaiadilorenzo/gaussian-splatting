@@ -31,7 +31,7 @@ MAX_NUM_IMAGES = 600
 
 _LOGGER = logging.getLogger(__name__)
 
-_DATA_ROOT_DIR = os.environ.get("DATA_ROOT_DIR", "/mnt/hdd4tb/")
+_DATA_ROOT_DIR = os.environ.get("DATA_ROOT_DIR", "/mnt/hdd4tb/3RScan")
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -106,7 +106,6 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name)) if os.path.exists(extr.name) is None else extr.name
         image_name = os.path.basename(image_path).split(".")[0] if os.path.exists(extr.name) is None else extr.name
-        image_path = image_path.replace("/cluster/project/cvg/Shared_datasets", "/mnt/hdd4tb/")
         image = Image.open(image_path)
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
@@ -157,6 +156,213 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
+
+def read3RScanSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=None):
+    try:
+        cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
+        cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
+        cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
+        cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
+    except:
+        cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.txt")
+        cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.txt")
+        cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
+        cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
+
+    reading_dir = "images" if images == None else images
+    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
+    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+
+    if eval:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+    else:
+        train_cam_infos = cam_infos
+        test_cam_infos = []
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+   
+    indices = None
+    if obj_id > 0:
+        frame_idxs, masks = scan3r.load_frame_idxs_per_obj(
+            data_dir=scan3r.get_scan3r_path(path),
+            scan_id=scan3r.get_scan_id(path),
+            obj_id=obj_id,
+        ) 
+        
+        frame_idxs, masks = scan3r.load_frame_idxs_per_obj(
+            data_dir=scannet_utils.get_scannet_path(path),
+            scan_id=scannet_utils.get_scan_id(path),
+            obj_id=obj_id
+        )
+    
+        indices = scan3r.load_obj_annotations(
+            data_dir=scan3r.get_scan3r_path(path),
+            scan_id=scan3r.get_scan_id(path),
+            obj_id=obj_id,
+        )
+    
+        train_cam_infos = [
+            cam
+            for cam in train_cam_infos
+            if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in frame_idxs)
+        ]
+        test_cam_infos = [
+            cam
+            for cam in test_cam_infos
+            if any(frame_idx in cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in frame_idxs)
+        ]
+
+        # add mask to images
+        frame_to_mask = {frame_idx: mask for frame_idx, mask in zip(frame_idxs, masks)}
+        for idx, cam in enumerate(train_cam_infos):
+            frame_idx = cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "")
+            mask = frame_to_mask[frame_idx]
+            mask[mask > 0] = 1
+            image = Image.fromarray((np.array(cam.image) * mask[:, :, None]).astype(np.uint8))
+            train_cam_infos[idx] = cam._replace(image=image)
+
+        for idx, cam in enumerate(test_cam_infos):
+            frame_idx = cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "")
+            mask = frame_to_mask[frame_idx]
+            mask[mask > 0] = 1
+            image = Image.fromarray(np.array(cam.image) * mask[:, :, None]).astype(np.uint8)
+            test_cam_infos[idx] = cam._replace(image=image)
+
+    
+    ply_path = os.path.join(path, "sparse/0/points3D.ply")
+    bin_path = os.path.join(path, "sparse/0/points3D.bin")
+    txt_path = os.path.join(path, "sparse/0/points3D.txt")
+    if not os.path.exists(ply_path):
+        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+        try:
+            xyz, rgb, _ = read_points3D_binary(bin_path)
+        except:
+            xyz, rgb, _ = read_points3D_text(txt_path)
+        storePly(ply_path, xyz, rgb)
+ 
+    pcd = fetchPly(ply_path, indices)
+    if num_images is not None:
+        with open(f'{_DATA_ROOT_DIR}/files/test_train_test_splits.json', 'r') as f:
+            splits = json.load(f)
+        scan_id = scan3r.get_scan_id(path)
+        if scan_id in splits and str(obj_id) in splits[scan_id]:
+            train_frames = splits[scan_id][str(obj_id)]['train']
+            train_cam_infos = [
+                cam for cam in train_cam_infos 
+                if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in train_frames)
+            ]
+
+    train_cam_infos = train_cam_infos[:MAX_NUM_IMAGES if num_images is None else num_images]
+    print(f"Train frames: {len(train_cam_infos)}")
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+    )
+    return scene_info
+
+def readScannetSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=None):
+    try:
+        cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
+        cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
+        cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
+        cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
+    except:
+        cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.txt")
+        cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.txt")
+        cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
+        cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
+
+    reading_dir = "images" if images == None else images
+    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
+    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+
+    if eval:
+        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+    else:
+        train_cam_infos = cam_infos
+        test_cam_infos = []
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+   
+    indices = None
+    if obj_id > 0:
+        frame_idxs, masks = scannet_utils.load_frame_idxs_per_obj(
+            data_dir=scannet_utils.get_scannet_path(path),
+            scan_id=scannet_utils.get_scan_id(path),
+            obj_id=obj_id
+        )
+       
+        indices = scannet_utils.load_obj_annotations(
+            data_dir=scannet_utils.get_scannet_path(path),
+            scan_id=scannet_utils.get_scan_id(path),
+            obj_id=obj_id,
+        )
+        train_cam_infos = [
+            cam
+            for cam in train_cam_infos
+            if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in frame_idxs)
+        ]
+        test_cam_infos = [
+            cam
+            for cam in test_cam_infos
+            if any(frame_idx in cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in frame_idxs)
+        ]
+
+        # add mask to images
+        frame_to_mask = {frame_idx: mask for frame_idx, mask in zip(frame_idxs, masks)}
+        for idx, cam in enumerate(train_cam_infos):
+            frame_idx = cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "")
+            mask = frame_to_mask[frame_idx]
+            mask[mask > 0] = 1
+            image = Image.fromarray((np.array(cam.image) * mask[:, :, None]).astype(np.uint8))
+            train_cam_infos[idx] = cam._replace(image=image)
+
+        for idx, cam in enumerate(test_cam_infos):
+            frame_idx = cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "")
+            mask = frame_to_mask[frame_idx]
+            mask[mask > 0] = 1
+            image = Image.fromarray(np.array(cam.image) * mask[:, :, None]).astype(np.uint8)
+            test_cam_infos[idx] = cam._replace(image=image)
+
+    
+    ply_path = os.path.join(path, "sparse/0/points3D.ply")
+    bin_path = os.path.join(path, "sparse/0/points3D.bin")
+    txt_path = os.path.join(path, "sparse/0/points3D.txt")
+    if not os.path.exists(ply_path):
+        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+        try:
+            xyz, rgb, _ = read_points3D_binary(bin_path)
+        except:
+            xyz, rgb, _ = read_points3D_text(txt_path)
+        storePly(ply_path, xyz, rgb)
+    pcd = fetchPly(ply_path, indices)
+    if num_images is not None:
+        with open(f'{_DATA_ROOT_DIR}/files/test_train_test_splits.json', 'r') as f:
+            splits = json.load(f)
+        scan_id = scan3r.get_scan_id(path)
+        if scan_id in splits and str(obj_id) in splits[scan_id]:
+            train_frames = splits[scan_id][str(obj_id)]['train']
+            train_cam_infos = [
+                cam for cam in train_cam_infos 
+                if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in train_frames)
+            ]
+
+    train_cam_infos = train_cam_infos[:MAX_NUM_IMAGES if num_images is None else num_images]
+    print(f"Train frames: {len(train_cam_infos)}")
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+    )
+    return scene_info
+    
 def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=None):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
@@ -191,61 +397,6 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=
         test_cam_infos: List[CameraInfo] = []
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
-   
-    indices = None
-    if obj_id > 0:
-        try: 
-            frame_idxs, masks = scan3r.load_frame_idxs_per_obj(
-                data_dir=scan3r.get_scan3r_path(path),
-                scan_id=scan3r.get_scan_id(path),
-                obj_id=obj_id,
-            ) 
-        except:
-            frame_idxs, masks = scannet_utils.load_frame_idxs_per_obj(
-                data_dir=scannet_utils.get_scannet_path(path),
-                scan_id=scannet_utils.get_scan_id(path),
-                obj_id=obj_id
-            )
-        try: 
-        
-            indices = scan3r.load_obj_annotations(
-                data_dir=scan3r.get_scan3r_path(path),
-                scan_id=scan3r.get_scan_id(path),
-                obj_id=obj_id,
-            )
-        except:
-            indices = scannet_utils.load_obj_annotations(
-                data_dir=scannet_utils.get_scannet_path(path),
-                scan_id=scannet_utils.get_scan_id(path),
-                obj_id=obj_id,
-            )
-        train_cam_infos = [
-            cam
-            for cam in train_cam_infos
-            if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in frame_idxs)
-        ]
-        test_cam_infos = [
-            cam
-            for cam in test_cam_infos
-            if any(frame_idx in cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in frame_idxs)
-        ]
-
-        # add mask to images
-        frame_to_mask = {frame_idx: mask for frame_idx, mask in zip(frame_idxs, masks)}
-        for idx, cam in enumerate(train_cam_infos):
-            frame_idx = cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "")
-            mask = frame_to_mask[frame_idx]
-            mask[mask > 0] = 1
-            image = Image.fromarray((np.array(cam.image) * mask[:, :, None]).astype(np.uint8))
-            train_cam_infos[idx] = cam._replace(image=image)
-
-        for idx, cam in enumerate(test_cam_infos):
-            frame_idx = cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "")
-            mask = frame_to_mask[frame_idx]
-            mask[mask > 0] = 1
-            image = Image.fromarray(np.array(cam.image) * mask[:, :, None]).astype(np.uint8)
-            test_cam_infos[idx] = cam._replace(image=image)
-
     ply_path = os.path.join(path, "sparse/0/points3D.ply")
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
     txt_path = os.path.join(path, "sparse/0/points3D.txt")
@@ -256,31 +407,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=
     except:
         xyz, rgb, _ = read_points3D_text(txt_path)
     storePly(ply_path, xyz, rgb)
-    try:
-        pcd = fetchPly(ply_path, indices)
-    except Exception as e:
-        _LOGGER.error(f"Error reading ply file: {e}")
-        pcd = None
-    
-    with open(f'{_DATA_ROOT_DIR}/3RScan/files/test_train_test_splits.json', 'r') as f:
-        splits = json.load(f)
-    
-    scan_id = scan3r.get_scan_id(path)
-    if scan_id in splits and str(obj_id) in splits[scan_id]:
-        train_frames = splits[scan_id][str(obj_id)]['train']
-        train_cam_infos = [
-            cam for cam in train_cam_infos 
-            if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in train_frames)
-        ]
-        test_frames = splits[scan_id][str(obj_id)]['test']
-        test_cam_infos = [
-            cam for cam in test_cam_infos 
-            if any(frame_idx == cam.image_path.split("/")[-1].split(".")[0].replace("frame-", "") for frame_idx in test_frames)
-        ]
-
-    train_cam_infos = train_cam_infos[:MAX_NUM_IMAGES if num_images is None else num_images]
-    test_cam_infos = test_cam_infos[:MAX_NUM_IMAGES if num_images is None else num_images]
-    
+    pcd = fetchPly(ply_path, indices)
     scene_info = SceneInfo(
         point_cloud=pcd,
         train_cameras=train_cam_infos,
@@ -372,5 +499,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
 
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
+    "Scan3R": read3RScanSceneInfo,
+    "ScanNet": readScannetSceneInfo,
     "Blender": readNerfSyntheticInfo
 }

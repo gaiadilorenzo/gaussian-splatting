@@ -405,3 +405,32 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+         
+    def to_pt(self):
+        xyz = self._xyz
+        sh0 = self._features_dc
+        f_rest = self._features_rest
+        opacities = self._opacity
+        scales = self._scaling
+        quats = self._rotation
+        assert quats.shape[-1] == 4
+
+        # Reshape SH coefficients
+        sh0 = sh0.reshape(-1, 1, 3)  # [N, 1, 3]
+        if f_rest is None:
+            f_rest = torch.zeros((sh0.shape[0], 15, 3), sh0.dtype)
+        else:
+            f_rest = f_rest.reshape(-1, 15, 3)  # [N, 15, 3], assuming SH degree 3
+        sh = torch.concatenate((sh0, f_rest), axis=1)  # [N, 16, 3]
+        sh = sh.transpose(1, 2)  # [N, 3, 16]
+
+        splats = {
+            "means": xyz.clone().detach().float(),
+            "sh0": sh0.clone().detach().float(),  # Keep sh0 to be able to save the model
+            "shN": f_rest.clone().detach().float(),  # Keep shN to be able to save the model
+            "opacities": opacities.clone().detach().float().squeeze(),
+            "scales": scales.clone().detach().float(),
+            "quats": quats.clone().detach().float(),
+            "sh": sh,
+        }
+        return splats

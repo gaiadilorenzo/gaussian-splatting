@@ -21,25 +21,20 @@ from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, indices=None, obj_id=None, save=False):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, obj_id=None):
     render_path = os.path.join(model_path, obj_id if obj_id else "", name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, obj_id if obj_id else "", name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
 
-    rendered_images = []
-    ground_truth_images = []
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        rendering = render(view, gaussians, pipeline, background, indices=indices)["render"]
+        rendering = render(view, gaussians, pipeline, background)["render"]
         gt = view.original_image[0:3, :, :]
-        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png")) if save else None
-        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png")) if save else None
-        rendered_images.append(rendering)
-        ground_truth_images.append(gt)
-    return rendered_images, ground_truth_images
+        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, indices=None, obj_id=None, save=False):
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, indices=None, obj_id=None):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
@@ -47,19 +42,12 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-        rendered_images = []
-        ground_truth_images = []
         if not skip_train:
-            rendered, ground_truth = render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, indices=indices, obj_id=obj_id, save=save)
-            rendered_images.extend(rendered)
-            ground_truth_images.extend(ground_truth)
+            render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, obj_id=obj_id)
             
         if not skip_test:
-            rendered, ground_truth = render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, indices=indices, obj_id=obj_id, save=save)
-            rendered_images.extend(rendered)
-            ground_truth_images.extend(ground_truth)
-        
-        return rendered_images, ground_truth_images, gaussians
+            render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, obj_id=obj_id)
+
     
 if __name__ == "__main__":
     # Set up command line argument parser

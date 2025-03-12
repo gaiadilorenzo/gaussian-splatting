@@ -56,6 +56,7 @@ class ModelParams(ParamGroup):
         self.eval = False
         self.object_id = -1
         self.num_images = -1
+        self.name = "Colmap"
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
