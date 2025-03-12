@@ -41,6 +41,7 @@ class Scene:
         self.test_cameras = {}
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
+            print(f"Found sparse dir, assuming Colmap data set and dataset {args.name}!")
             scene_info = sceneLoadTypeCallbacks[args.name](
                 args.source_path, args.images, args.eval, obj_id=args.object_id, num_images=args.num_images
             )

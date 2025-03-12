@@ -114,8 +114,8 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
 
 
 def fetchPly(path, indices=None):
-    plydata = PlyData.read(path) if path.endswith(".ply") else np.load(path)
-    vertices = plydata["vertex"] if path.endswith(".ply") else plydata
+    plydata = PlyData.read(path) 
+    vertices = plydata["vertex"]
     positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
     colors = np.array([ 1, 0, 0] * positions.shape[0]).reshape(-1, 3)
     if "nx" in vertices:
@@ -192,13 +192,13 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=
     ply_path = os.path.join(path, "sparse/0/points3D.ply")
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
     txt_path = os.path.join(path, "sparse/0/points3D.txt")
-    # if not os.path.exists(ply_path):
-    print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
-    try:
-        xyz, rgb, _ = read_points3D_binary(bin_path)
-    except:
-        xyz, rgb, _ = read_points3D_text(txt_path)
-    storePly(ply_path, xyz, rgb)
+    if not os.path.exists(ply_path):
+        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")  
+        try:
+            xyz, rgb, _ = read_points3D_binary(bin_path)
+        except:
+            xyz, rgb, _ = read_points3D_text(txt_path)
+        storePly(ply_path, xyz, rgb)
     pcd = fetchPly(ply_path)
     scene_info = SceneInfo(
         point_cloud=pcd,
@@ -244,8 +244,8 @@ def read3RScanSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=
         ) 
         
         frame_idxs, masks = scan3r.load_frame_idxs_per_obj(
-            data_dir=scannet_utils.get_scannet_path(path),
-            scan_id=scannet_utils.get_scan_id(path),
+            data_dir=scan3r.get_scan3r_path(path),
+            scan_id=scan3r.get_scan_id(path),
             obj_id=obj_id
         )
     
@@ -293,7 +293,6 @@ def read3RScanSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images=
         except:
             xyz, rgb, _ = read_points3D_text(txt_path)
         storePly(ply_path, xyz, rgb)
- 
     pcd = fetchPly(ply_path, indices)
     if num_images is not None:
         with open(f'{_DATA_ROOT_DIR}/files/test_train_test_splits.json', 'r') as f:
@@ -398,7 +397,7 @@ def readScannetSceneInfo(path, images, eval, llffhold=8, obj_id=None, num_images
     if num_images is not None:
         with open(f'{_DATA_ROOT_DIR}/files/test_train_test_splits.json', 'r') as f:
             splits = json.load(f)
-        scan_id = scan3r.get_scan_id(path)
+        scan_id = scannet_utils.get_scan_id(path)
         if scan_id in splits and str(obj_id) in splits[scan_id]:
             train_frames = splits[scan_id][str(obj_id)]['train']
             train_cam_infos = [
